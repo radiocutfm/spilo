@@ -2,6 +2,7 @@ ARG PGVERSION=12
 ARG TIMESCALEDB=1.6.0
 ARG TIMESCALEDB_LEGACY=$TIMESCALEDB
 ARG DEMO=false
+ARG UNIDECODE=false
 ARG COMPRESS=false
 
 FROM ubuntu:18.04 as builder-false
@@ -10,6 +11,7 @@ RUN export DEBIAN_FRONTEND=noninteractive \
     && echo 'APT::Install-Recommends "0";\nAPT::Install-Suggests "0";' > /etc/apt/apt.conf.d/01norecommend \
     && apt-get update \
     && apt-get install -y curl ca-certificates less locales jq vim-tiny gnupg1 cron runit dumb-init \
+    && update-ca-certificates \
     && ln -s chpst /usr/bin/envdir \
 \
     && if [ "$DEMO" != "true" ]; then \
@@ -176,6 +178,13 @@ RUN export DEBIAN_FRONTEND=noninteractive \
                 && make -C build install \
                 && strip /usr/lib/postgresql/$version/lib/timescaledb*.so \
                 && cd ..; \
+            fi \
+\
+            # Install Unidecode
+            && if [ "$UNIDECODE" == "true" ]; then \
+                 curl -sL https://github.com/alexkuz/pg_unidecode/releases/download/v0.0.6/unidecode-0.0.6.tar.gz | tar xz \
+                 && cd unidecode-0.0.6 && make && make install \
+                 && cd .. && rm -fR unidecode-0.0.6 ; \
             fi \
 \
             && if [ "$DEMO" != "true" ]; then \
