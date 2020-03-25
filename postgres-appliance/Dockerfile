@@ -10,9 +10,12 @@ FROM ubuntu:18.04 as builder-false
 RUN export DEBIAN_FRONTEND=noninteractive \
     && echo 'APT::Install-Recommends "0";\nAPT::Install-Suggests "0";' > /etc/apt/apt.conf.d/01norecommend \
     && apt-get update \
-    && apt-get install -y curl ca-certificates less locales jq vim-tiny gnupg1 cron runit dumb-init \
-    && update-ca-certificates \
+    && apt-get install -y curl ca-certificates less locales jq vim-tiny gnupg1 cron runit dumb-init libcap2-bin \
     && ln -s chpst /usr/bin/envdir \
+    # Make it possible to use the following utilities without root
+    && setcap 'cap_sys_nice+ep' /usr/bin/chrt \
+    && setcap 'cap_sys_nice+ep' /usr/bin/renice \
+    && chmod u+s /usr/sbin/cron \
 \
     && if [ "$DEMO" != "true" ]; then \
         # Required for wal-e
@@ -39,6 +42,8 @@ RUN export DEBIAN_FRONTEND=noninteractive \
     && curl -s -o - https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add - \
 \
     # Clean up
+    && apt-get purge -y libcap2-bin \
+    && apt-get autoremove -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
             /var/cache/debconf/* \
@@ -48,12 +53,13 @@ RUN export DEBIAN_FRONTEND=noninteractive \
             /usr/share/locale/??_?? \
     && find /var/log -type f -exec truncate --size 0 {} \;
 
-COPY dependencies/debs /builddeps
+COPY dependencies/debs dependencies/src /builddeps/
 ADD set_user.patch /builddeps/
 
 ARG PGVERSION
 ARG TIMESCALEDB
 ARG TIMESCALEDB_LEGACY
+ARG TIMESCALEDB_APACHE_ONLY=true
 ARG DEMO
 ARG COMPRESS
 ARG PGOLDVERSIONS="9.3 9.4 9.5 9.6 10 11"
@@ -65,11 +71,13 @@ ARG DEB_PG_SUPPORTED_VERSIONS="$PGOLDVERSIONS $PGVERSION"
 ENV POSTGIS_VERSION=3.0 \
     BG_MON_COMMIT=7a4a4a621f89cc032bd7d497ce2373a1220c89a5 \
     PG_AUTH_MON_COMMIT=902c670c9f2071b30e1d4437e7a38e2e136f9be6 \
+    PG_MON_COMMIT=54c679478006f19df441bd98a273e2e3352690b6 \
     DECODERBUFS=v1.0.1.Final \
     SET_USER=REL1_6_2 \
     PLPGSQL_CHECK=v1.8.2 \
     PLPROFILER=REL4_1 \
-    PAM_OAUTH2=v1.0
+    PAM_OAUTH2=v1.0 \
+    PLANTUNER_COMMIT=7c276460e4a4052e454b9c44148346e7286eb280
 
 RUN export DEBIAN_FRONTEND=noninteractive \
     && set -ex \
@@ -98,7 +106,8 @@ RUN export DEBIAN_FRONTEND=noninteractive \
         && git clone -b $DECODERBUFS https://github.com/debezium/postgres-decoderbufs.git \
         && git clone -b $PLPROFILER https://github.com/bigsql/plprofiler.git \
         && git clone -b $PLPGSQL_CHECK https://github.com/okbob/plpgsql_check.git \
-        && git clone git://www.sigaev.ru/plantuner.git \
+        && tar -xzf plantuner-${PLANTUNER_COMMIT}.tar.gz \
+        && curl -sL https://github.com/RafiaSabih/pg_mon/archive/$PG_MON_COMMIT.tar.gz | tar xz \
 \
         && for p in python3-keyring python3-docutils ieee-data; do \
             version=$(apt-cache show $p | sed -n 's/^Version: //p' | sort -rV | head -n 1) \
@@ -106,7 +115,6 @@ RUN export DEBIAN_FRONTEND=noninteractive \
             && equivs-build $p; \
         done; \
     fi \
-
 \
     && if [ "$WITH_PERL" != "true" ]; then \
         version=$(apt-cache show perl | sed -n 's/^Version: //p' | sort -rV | head -n 1) \
@@ -134,6 +142,7 @@ RUN export DEBIAN_FRONTEND=noninteractive \
             && if [ "$DEMO" != "true" ]; then \
                 EXTRAS="postgresql-pltcl-${version} \
                         postgresql-${version}-hypopg \
+                        postgresql-${version}-pg-checksums \
                         postgresql-${version}-pgq3 \
                         postgresql-${version}-pldebugger \
                         postgresql-${version}-pllua \
@@ -142,15 +151,18 @@ RUN export DEBIAN_FRONTEND=noninteractive \
                 && if [ "$WITH_PERL" = "true" ]; then \
                     EXTRAS="$EXTRAS postgresql-plperl-${version}"; \
                 fi \
-                && if [ $version != "9.3" ]; then EXTRAS="$EXTRAS postgresql-${version}-wal2json"; fi \
+                && if [ $version != "9.3" ]; then \
+                    EXTRAS="$EXTRAS postgresql-${version}-pglogical \
+                            postgresql-${version}-wal2json"; \
+                fi \
                 && if [ $version != "9.3" ] && [ $version != "9.4" ]; then \
                     EXTRAS="$EXTRAS postgresql-${version}-postgis-${POSTGIS_VERSION%.0} \
                             postgresql-${version}-postgis-${POSTGIS_VERSION%.0}-scripts"; \
                 fi \
                 && if [ $version != "9.3" ] && [ $version != "12" ]; then \
-                    EXTRAS="$EXTRAS postgresql-${version}-pglogical" \
-                    && if [ $version != "9.4" ]; then \
-                        EXTRAS="$EXTRAS postgresql-${version}-pgl-ddl-deploy"; \
+                    if [ $version != "9.4" ]; then \
+                        EXTRAS="$EXTRAS postgresql-${version}-pgl-ddl-deploy \
+                                postgresql-${version}-pglogical-ticker"; \
                     fi \
                     && if [ $version != "11" ]; then \
                         EXTRAS="$EXTRAS postgresql-${version}-amcheck"; \
@@ -174,7 +186,7 @@ RUN export DEBIAN_FRONTEND=noninteractive \
                 cd timescaledb \
                 && if [ "$version" != "9.6" ]; then git checkout $TIMESCALEDB; fi \
                 && rm -fr build \
-                && ./bootstrap -DAPACHE_ONLY=1 -DSEND_TELEMETRY_DEFAULT=NO -DREGRESS_CHECKS=OFF \
+                && ./bootstrap -DAPACHE_ONLY=$TIMESCALEDB_APACHE_ONLY -DSEND_TELEMETRY_DEFAULT=NO -DREGRESS_CHECKS=OFF \
                 && make -C build install \
                 && strip /usr/lib/postgresql/$version/lib/timescaledb*.so \
                 && cd ..; \
@@ -204,7 +216,10 @@ RUN export DEBIAN_FRONTEND=noninteractive \
                     && rm -fr pg_rewind-${REWIND_VER} postgresql-${version}*; \
                 fi \
 \
-                && EXTRA_EXTENSIONS="plprofiler plantuner" \
+                && EXTRA_EXTENSIONS="plprofiler plantuner-${PLANTUNER_COMMIT}" \
+                && if [ "$version" = "10" ] || [ "$version" = "11" ] || [ "$version" = "12" ] ; then \
+                     EXTRA_EXTENSIONS="$EXTRA_EXTENSIONS  pg_mon-${PG_MON_COMMIT}"; \
+                fi \
                 && if [ "$version" != "9.3" ]; then \
                     EXTRA_EXTENSIONS="$EXTRA_EXTENSIONS plpgsql_check postgres-decoderbufs"; \
                 fi; \
