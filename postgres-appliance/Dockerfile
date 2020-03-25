@@ -182,7 +182,7 @@ RUN export DEBIAN_FRONTEND=noninteractive \
 \
             # Install Unidecode
             && if [ "$UNIDECODE" == "true" ]; then \
-                 curl -sL https://github.com/alexkuz/pg_unidecode/releases/download/v0.0.7/unidecode-0.0.7.tar.gz | tar xz \
+                 curl -sL https://github.com/gnarvaja/pg_unidecode/releases/download/v0.0.7/unidecode-0.0.7.tar.gz | tar xz \
                  && cd unidecode-0.0.7 && make && make install \
                  && cd .. && rm -fR unidecode-0.0.7 ; \
             fi \
