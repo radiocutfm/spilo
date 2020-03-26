@@ -2,7 +2,6 @@ ARG PGVERSION=12
 ARG TIMESCALEDB=1.6.0
 ARG TIMESCALEDB_LEGACY=$TIMESCALEDB
 ARG DEMO=false
-ARG UNIDECODE=false
 ARG COMPRESS=false
 
 FROM ubuntu:18.04 as builder-false
@@ -64,6 +63,7 @@ ARG DEMO
 ARG COMPRESS
 ARG PGOLDVERSIONS="9.3 9.4 9.5 9.6 10 11"
 ARG WITH_PERL=false
+ARG UNIDECODE=false
 
 ARG DEB_PG_SUPPORTED_VERSIONS="$PGOLDVERSIONS $PGVERSION"
 
@@ -193,10 +193,12 @@ RUN export DEBIAN_FRONTEND=noninteractive \
             fi \
 \
             # Install Unidecode
-            && if [ "$UNIDECODE" == "true" ]; then \
-                 curl -sL https://github.com/gnarvaja/pg_unidecode/releases/download/v0.0.7/unidecode-0.0.7.tar.gz | tar xz \
-                 && cd unidecode-0.0.7 && make && make install \
-                 && cd .. && rm -fR unidecode-0.0.7 ; \
+            && if [ "$UNIDECODE" = "true" ]; then \
+                 curl -sL https://github.com/gnarvaja/pg_unidecode/releases/download/v0.0.7/unidecode-0.0.7.tar.gz | tar xz && \
+                    cd unidecode-0.0.7 && \
+                    PG_CONFIG=/usr/lib/postgresql/$version/bin/pg_config make && \
+                    PG_CONFIG=/usr/lib/postgresql/$version/bin/pg_config make install && \
+                    cd .. && rm -fR unidecode-0.0.7 ; \
             fi \
 \
             && if [ "$DEMO" != "true" ]; then \
