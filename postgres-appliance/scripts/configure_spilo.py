@@ -10,6 +10,7 @@ import psutil
 import socket
 import subprocess
 import sys
+import pwd
 
 from copy import deepcopy
 from six.moves.urllib_parse import urlparse
@@ -32,7 +33,7 @@ MEMORY_LIMIT_IN_BYTES_PATH = '/sys/fs/cgroup/memory/memory.limit_in_bytes'
 
 # (min_version, max_version, shared_preload_libraries, extwlist.extensions)
 extensions = {
-    'timescaledb':    (9.6, 11, True,  True),
+    'timescaledb':    (9.6, 12, True,  True),
     'pg_cron':        (9.5, 12, True,  False),
     'pg_stat_kcache': (9.4, 12, True,  False),
     'pg_partman':     (9.4, 12, False, True)
@@ -106,7 +107,7 @@ def write_certificates(environment, overwrite):
         output, _ = p.communicate()
         logging.debug(output)
 
-    uid = os.stat(environment['PGHOME']).st_uid
+    uid = pwd.getpwnam(environment['PGUSER_SUPERUSER']).pw_uid
     os.chmod(environment['SSL_PRIVATE_KEY_FILE'], 0o600)
     os.chown(environment['SSL_PRIVATE_KEY_FILE'], uid, -1)
 
@@ -257,6 +258,7 @@ postgresql:
     ssl_key_file: {{SSL_PRIVATE_KEY_FILE}}
     shared_preload_libraries: 'bg_mon,pg_stat_statements,pgextwlist,pg_auth_mon,set_user'
     bg_mon.listen_address: '{{BGMON_LISTEN_IP}}'
+    bg_mon.history_buckets: 120
     pg_stat_statements.track_utility: 'off'
     extwlist.extensions: 'btree_gin,btree_gist,citext,hstore,intarray,\
 ltree,pgcrypto,pgq,pg_trgm,postgres_fdw,tablefunc,uuid-ossp,hypopg'
@@ -305,20 +307,22 @@ ltree,pgcrypto,pgq,pg_trgm,postgres_fdw,tablefunc,uuid-ossp,hypopg'
  {{^CALLBACK_SCRIPT}}
     on_role_change: '/scripts/on_role_change.sh {{HUMAN_ROLE}} true'
  {{/CALLBACK_SCRIPT}}
-{{#USE_WALE}}
   create_replica_method:
+  {{#USE_WALE}}
     - wal_e
+  {{/USE_WALE}}
     - basebackup_fast_xlog
+  {{#USE_WALE}}
   wal_e:
     command: envdir {{WALE_ENV_DIR}} bash /scripts/wale_restore.sh
     threshold_megabytes: {{WALE_BACKUP_THRESHOLD_MEGABYTES}}
     threshold_backup_size_percentage: {{WALE_BACKUP_THRESHOLD_PERCENTAGE}}
     retries: 2
     no_master: 1
+  {{/USE_WALE}}
   basebackup_fast_xlog:
     command: /scripts/basebackup.sh
     retries: 2
-{{/USE_WALE}}
 {{#STANDBY_WITH_WALE}}
   bootstrap_standby_with_wale:
     command: envdir "{{STANDBY_WALE_ENV_DIR}}" bash /scripts/wale_restore.sh
@@ -468,8 +472,8 @@ def get_placeholders(provider):
     placeholders.setdefault('SSL_TEST_RELOAD', 'SSL_PRIVATE_KEY_FILE' in os.environ)
     placeholders.setdefault('SSL_CA_FILE', '')
     placeholders.setdefault('SSL_CRL_FILE', '')
-    placeholders.setdefault('SSL_CERTIFICATE_FILE', os.path.join(placeholders['RW_DIR'], 'server.crt'))
-    placeholders.setdefault('SSL_PRIVATE_KEY_FILE', os.path.join(placeholders['RW_DIR'], 'server.key'))
+    placeholders.setdefault('SSL_CERTIFICATE_FILE', os.path.join(placeholders['RW_DIR'], 'certs', 'server.crt'))
+    placeholders.setdefault('SSL_PRIVATE_KEY_FILE', os.path.join(placeholders['RW_DIR'], 'certs', 'server.key'))
     placeholders.setdefault('WALE_BACKUP_THRESHOLD_MEGABYTES', 102400)
     placeholders.setdefault('WALE_BACKUP_THRESHOLD_PERCENTAGE', 30)
     # if Kubernetes is defined as a DCS, derive the namespace from the POD_NAMESPACE, if not set explicitely.
